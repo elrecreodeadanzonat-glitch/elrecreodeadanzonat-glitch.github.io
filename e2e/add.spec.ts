@@ -1,48 +1,8 @@
-import { expect, test, type Page } from '@playwright/test';
+import { expect, test } from './fixtures';
 import { SHOTS, currentPhoto, openBook } from './helpers';
 
-const TOKEN = 'github_pat_TEST_ONLY_do_not_store';
-
-/** Fake GitHub + a fake «live» site that already serves what was just published. */
-async function mockPublishing(page: Page) {
-  const state = { galleryText: '', revision: '' };
-  await page.route('https://api.github.com/**', async (route) => {
-    const req = route.request();
-    const url = req.url();
-    const json = (j: unknown) => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(j) });
-    if (req.headers()['authorization'] !== `Bearer ${TOKEN}`) return route.fulfill({ status: 401, body: '' });
-    if (url.endsWith('.github.io') && req.method() === 'GET') return json({ permissions: { push: true } });
-    if (url.endsWith('/git/ref/heads/main')) return json({ object: { sha: 'base' } });
-    if (url.includes('/contents/public/gallery.json')) {
-      const live = await (await page.request.get('/gallery.json')).text();
-      return json({ content: Buffer.from(live).toString('base64') });
-    }
-    if (url.endsWith('/git/commits/base')) return json({ tree: { sha: 'tree0' } });
-    if (url.endsWith('/git/blobs')) {
-      const text = Buffer.from(req.postDataJSON().content, 'base64').toString('utf8');
-      if (text.startsWith('{') && text.includes('"revision"')) {
-        state.galleryText = text;
-        state.revision = JSON.parse(text).revision;
-      }
-      return json({ sha: 'b' + Math.random().toString(36).slice(2) });
-    }
-    if (url.endsWith('/git/trees')) return json({ sha: 'tree1' });
-    if (url.endsWith('/git/commits')) return json({ sha: 'c1' });
-    if (url.endsWith('/git/refs/heads/main')) return json({});
-    return route.fulfill({ status: 404, body: '' });
-  });
-  const isSiteGallery = (u: URL) => u.hostname !== 'api.github.com' && u.pathname.endsWith('/gallery.json');
-  await page.route(isSiteGallery, async (route) => {
-    if (!state.galleryText) return route.continue();
-    return route.fulfill({ status: 200, contentType: 'application/json', body: state.galleryText });
-  });
+test('«+» → elegir una foto → «Agregar» → ¡Listo! → el libro la muestra (sin llaves)', async ({ page, cloud }, info) => {
   const sample = await (await page.request.get('/photos/md/p010.webp')).body();
-  await page.route(/\/photos\/(full|md|thumb)\/n[a-z0-9]+\.(webp|jpg)$/, (route) => route.fulfill({ status: 200, contentType: 'image/webp', body: sample }));
-  return { sample };
-}
-
-test('«+» al final del carrusel: agregar una foto y publicarla', async ({ page }, info) => {
-  const { sample } = await mockPublishing(page);
   await openBook(page);
   await currentPhoto(page);
   await page.getByTestId('thumbs-toggle').click();
@@ -54,28 +14,48 @@ test('«+» al final del carrusel: agregar una foto y publicarla', async ({ page
   await tile.scrollIntoViewIfNeeded();
   await page.screenshot({ path: `${SHOTS}/carrusel-mas-${info.project.name}.png` });
 
-  await page.getByTestId('add-input').setInputFiles({ name: 'foto-nueva.webp', mimeType: 'image/webp', buffer: sample });
+  await page.getByTestId('add-input').setInputFiles({ name: 'cumple.webp', mimeType: 'image/webp', buffer: sample });
   const sheet = page.getByTestId('add-photos');
   await expect(sheet).toBeVisible();
   await expect(sheet.locator('.add-grid img')).toHaveCount(1, { timeout: 20_000 });
-  await expect(page.getByTestId('add-publish')).toHaveText(/Publicar 1 foto/);
-  // autoplay is stopped while the sheet is open
-  await page.waitForTimeout(1200);
+  const add = page.getByTestId('add-publish');
+  await expect(add).toHaveText('Agregar 1 foto al libro');
+  await expect(add).toBeEnabled();
+  // nothing to copy, no keys, no accounts
+  await expect(page.locator('input[type=password], [data-testid=token-input]')).toHaveCount(0);
+  await page.getByTestId('add-name').fill('Tía Rosa');
   await page.screenshot({ path: `${SHOTS}/agregar-fotos-${info.project.name}.png` });
 
-  await page.getByTestId('add-publish').click();
-  await page.getByTestId('token-input').fill(TOKEN);
-  await page.getByTestId('publish-now').click();
-  await expect(page.getByTestId('publish-done')).toContainText('Libro actualizado', { timeout: 30_000 });
-  await page.getByRole('button', { name: 'Listo' }).click();
-  await expect(page.getByTestId('counter')).toHaveText('Foto 35 de 35');
-  expect(await currentPhoto(page)).toMatch(/^n/);
+  await add.click();
+  await expect(page.getByTestId('add-done')).toContainText('Tu foto ya está en el libro', { timeout: 20_000 });
+  await page.screenshot({ path: `${SHOTS}/agregar-listo-${info.project.name}.png` });
+  const [saved] = cloud.list('photos');
+  expect(saved).toMatchObject({ author: 'Tía Rosa', hidden: false, rotation: 0 });
+  expect(String(saved.thumb)).toMatch(/^data:image\/(webp|jpeg);base64,/);
+  const [img] = cloud.list('photoImages');
+  expect(img.id).toBe(saved.id);
+  expect(String(img.data).length).toBeLessThan(1_000_000);
 
-  const stored = await page.evaluate(() => JSON.stringify({ ...localStorage }) + JSON.stringify({ ...sessionStorage }) + document.cookie);
-  expect(stored).not.toContain(TOKEN);
+  await page.getByTestId('add-see').click();
+  await expect(page.getByTestId('add-photos')).toHaveCount(0);
+  await expect(page.getByTestId('counter')).toHaveText('Foto 35 de 35');
+  expect(await currentPhoto(page)).toBe(saved.id);
+  await expect(page.locator('.layer.is-current img')).toHaveAttribute('src', /^data:image\/(webp|jpeg);base64,/);
+  await expect(page.locator('.layer.is-current img')).not.toHaveClass(/is-pending/);
+  await expect(page.locator('.shared-by')).toHaveText('Compartida por Tía Rosa');
+  await page.waitForTimeout(800);
+  await page.screenshot({ path: `${SHOTS}/foto-nueva-${info.project.name}.png` });
+
+  // a new visitor sees it too (from the database, not from this tab's memory)
+  await openBook(page);
+  await page.getByTestId('thumbs-toggle').click();
+  await expect(page.locator('.tray-list .thumb:not(.add)')).toHaveCount(35);
+  await page.getByRole('button', { name: 'Ir a la foto 35', exact: true }).click();
+  expect(await currentPhoto(page)).toBe(saved.id);
+  await expect(page.locator('.layer.is-current img')).toHaveAttribute('src', /^data:image\//);
 });
 
-test('«+» → guardar y seguir en el editor', async ({ page }, info) => {
+test('varias fotos: quitar una, se cae internet, «Intentar otra vez»', async ({ page, cloud }, info) => {
   test.skip(info.project.name !== 'desktop', 'basta en un tamaño');
   const sample = await (await page.request.get('/photos/md/p010.webp')).body();
   await openBook(page);
@@ -84,15 +64,34 @@ test('«+» → guardar y seguir en el editor', async ({ page }, info) => {
   await page.getByTestId('add-input').setInputFiles([
     { name: 'a.webp', mimeType: 'image/webp', buffer: sample },
     { name: 'b.webp', mimeType: 'image/webp', buffer: sample },
+    { name: 'c.webp', mimeType: 'image/webp', buffer: sample },
   ]);
-  await expect(page.getByTestId('add-photos').locator('.add-grid img')).toHaveCount(2, { timeout: 20_000 });
-  // remove one before saving
+  const sheet = page.getByTestId('add-photos');
+  await expect(sheet.locator('.add-grid img')).toHaveCount(3, { timeout: 20_000 });
   await page.getByRole('button', { name: 'Quitar b.webp' }).click();
-  await expect(page.getByTestId('add-photos').locator('.add-grid img')).toHaveCount(1);
-  await page.getByTestId('add-to-editor').click();
-  await page.waitForURL('**/admin/');
-  await expect(page.getByText('Tienes un borrador sin publicar')).toBeVisible();
-  await page.getByRole('button', { name: 'Continuar borrador' }).click();
-  await expect(page.getByTestId('admin-card')).toHaveCount(35);
-  await expect(page.getByTestId('admin-card').last().getByText('Nueva')).toBeVisible();
+  await expect(page.getByTestId('add-publish')).toHaveText('Agregar 2 fotos al libro');
+
+  cloud.failNext = 1;
+  await page.getByTestId('add-publish').click();
+  await expect(page.getByTestId('add-failed')).toContainText('Se subió 1 foto, pero 1 foto no', { timeout: 20_000 });
+  expect(cloud.list('photos')).toHaveLength(1);
+  await page.getByTestId('add-retry').click();
+  await expect(page.getByTestId('add-done')).toContainText('Tus 2 fotos ya están en el libro', { timeout: 20_000 });
+  expect(cloud.list('photos')).toHaveLength(2);
+  await page.getByTestId('add-see').click();
+  await expect(page.getByTestId('counter')).toHaveText('Foto 35 de 36');
+});
+
+test('cancelar no sube nada', async ({ page, cloud }, info) => {
+  test.skip(info.project.name !== 'mobile', 'basta en un tamaño');
+  const sample = await (await page.request.get('/photos/thumb/p003.webp')).body();
+  await openBook(page);
+  await currentPhoto(page);
+  await page.getByTestId('thumbs-toggle').click();
+  await page.getByTestId('add-input').setInputFiles({ name: 'x.webp', mimeType: 'image/webp', buffer: sample });
+  await expect(page.getByTestId('add-photos').locator('.add-grid img')).toHaveCount(1, { timeout: 20_000 });
+  await page.getByRole('button', { name: 'Cancelar' }).click();
+  await expect(page.getByTestId('add-photos')).toHaveCount(0);
+  expect(cloud.commits).toBe(0);
+  await expect(page.getByTestId('counter')).toHaveText(/de 34$/);
 });

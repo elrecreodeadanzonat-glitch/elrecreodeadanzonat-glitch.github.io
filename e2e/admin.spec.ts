@@ -1,5 +1,7 @@
-import { expect, test, type Page } from '@playwright/test';
+import type { Page } from '@playwright/test';
+import { expect, test } from './fixtures';
 import { SHOTS } from './helpers';
+import { TEST_CODE } from './fakeFirestore';
 
 const cards = (page: Page) => page.getByTestId('admin-card');
 const ids = async (page: Page) => cards(page).evaluateAll((els) => els.map((e) => e.getAttribute('data-photo-id')));
@@ -131,4 +133,68 @@ test('editor: agregar una foto y publicar (API de GitHub simulada), sin guardar 
     return dump + idb + document.cookie;
   });
   expect(stored).not.toContain(TOKEN);
+});
+
+test('editor: comentarios y fotos de la familia; ocultar con el código', async ({ page, cloud }) => {
+  const thumb = 'data:image/webp;base64,' + (await (await page.request.get('/photos/thumb/p012.webp')).body()).toString('base64');
+  const image = 'data:image/webp;base64,' + (await (await page.request.get('/photos/md/p012.webp')).body()).toString('base64');
+  const famId = cloud.seedPhoto({ thumb, image, author: 'Primo Juan' });
+  cloud.seedComment('p001', 'Qué bonita', 'Ana');
+  const spamId = cloud.seedComment('p001', 'compra aquí', 'Spam');
+  cloud.seedComment(famId, '¡Esta la tomé yo!', 'Primo Juan');
+
+  await page.goto('/admin/');
+  await expect(cards(page)).toHaveCount(34);
+  const first = cards(page).first();
+  await expect(first.getByTestId('card-comments')).toHaveText('2');
+  await first.getByTestId('card-comments').click();
+  const sheet = page.getByTestId('comments');
+  await expect(sheet.getByTestId('comment')).toHaveCount(2);
+
+  // hide the spam: asks for the family code (a wrong one is refused)
+  await sheet.getByTestId('comment').filter({ hasText: 'compra aquí' }).getByTestId('comment-moderate').click();
+  await expect(page.getByTestId('modcode')).toBeVisible();
+  await page.getByTestId('modcode-input').fill('AAAA-BBBB-CCCC');
+  await page.getByTestId('modcode-ok').click();
+  await expect(page.getByTestId('modcode')).toContainText('no es correcto');
+  await page.getByTestId('modcode-input').fill(TEST_CODE.toLowerCase());
+  await page.getByTestId('modcode-ok').click();
+  await expect(page.getByTestId('modcode')).toHaveCount(0);
+  await expect(sheet.getByTestId('comment').filter({ hasText: 'compra aquí' })).toContainText('Oculto');
+  expect(cloud.list('comments').find((c) => c.id === spamId)).toMatchObject({ hidden: true });
+  await page.screenshot({ path: `${SHOTS}/admin-comentarios-desktop.png` });
+  await page.getByTestId('comments-close').click();
+  await expect(first.getByTestId('card-comments')).toHaveText('1');
+
+  // family tab: the photo added from the book, its comment, hide (code already known this tab) and show again
+  await page.getByTestId('family-tab').click();
+  const fam = page.getByTestId('family-card');
+  await expect(fam).toHaveCount(1);
+  await expect(fam).toContainText('Primo Juan');
+  await expect(fam.locator('.num')).toHaveText('35');
+  await page.screenshot({ path: `${SHOTS}/admin-familia-desktop.png` });
+  await fam.getByTestId('family-hide').click();
+  await page.getByTestId('confirm-yes').click();
+  await expect(fam.locator('.num')).toHaveText('Oculta');
+  expect(cloud.list('photos')[0]).toMatchObject({ hidden: true });
+  await expect(page.getByTestId('modcode')).toHaveCount(0);
+  await fam.getByTestId('family-show').click();
+  await expect(fam.locator('.num')).toHaveText('35');
+  await fam.getByRole('button', { name: 'Rotar 90 grados' }).click();
+  await expect(fam.locator('img')).toHaveAttribute('style', /rotate\(90deg\)/);
+  expect(cloud.list('photos')[0]).toMatchObject({ hidden: false, rotation: 90 });
+
+  // the code is never stored on the device
+  const stored = await page.evaluate(() => JSON.stringify({ ...localStorage }) + JSON.stringify({ ...sessionStorage }) + document.cookie);
+  expect(stored).not.toContain(TEST_CODE.replace(/-/g, ''));
+
+  // the book: spam gone, family photo at the end
+  await page.goto('/');
+  await page.getByTestId('open-book').click();
+  await expect(page.getByTestId('comments-count')).toHaveText('1');
+  await page.getByTestId('thumbs-toggle').click();
+  await page.getByRole('button', { name: 'Ir a la foto 35', exact: true }).click();
+  await expect(page.getByTestId('counter')).toHaveText('Foto 35 de 35');
+  await expect(page.locator('.shared-by')).toHaveText('Compartida por Primo Juan');
+  await expect(page.getByTestId('comments-open')).toContainText('Primo Juan: ¡Esta la tomé yo!');
 });

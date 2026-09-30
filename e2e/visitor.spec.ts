@@ -1,4 +1,4 @@
-import { expect, test } from '@playwright/test';
+import { expect, test } from './fixtures';
 import { INTRO, OUTRO, SHOTS, currentIndex, currentPhoto, jumpTo, openBook, viewer } from './helpers';
 
 test('portada: libro, texto exacto y botón; al abrir empieza la música', async ({ page }, info) => {
