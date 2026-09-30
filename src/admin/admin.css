@@ -136,3 +136,13 @@ body { overflow: auto; background: var(--cream); }
   background: var(--mustard); color: var(--ink); font-weight: 700; cursor: pointer;
 }
 .preview-close svg { width: 18px; height: 18px; }
+
+/* phones: the header scrolls away and the buttons stay compact */
+@media (max-width: 640px) {
+  .admin-head { position: static; padding-bottom: 10px; }
+  .admin-head h1 { font-size: 1.3rem; }
+  .head-actions { width: 100%; gap: 6px; }
+  .head-actions .btn { min-height: 42px; padding: 0 12px; font-size: .88rem; }
+  .head-actions .btn.primary { flex: 1 1 100%; justify-content: center; }
+  .help { font-size: .9rem; }
+}
