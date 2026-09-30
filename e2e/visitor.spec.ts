@@ -95,7 +95,7 @@ test('miniaturas, encajar/llenar, pantalla completa, música y teclado', async (
   // thumbnails tray
   await page.getByTestId('thumbs-toggle').click();
   await expect(page.getByTestId('tray')).toHaveClass(/open/);
-  await expect(page.locator('.thumb')).toHaveCount(34);
+  await expect(page.locator('.thumb:not(.add)')).toHaveCount(34);
   await page.waitForTimeout(500);
   await page.screenshot({ path: `${SHOTS}/miniaturas-${info.project.name}.png` });
   await page.getByRole('button', { name: 'Ir a la foto 10', exact: true }).click();

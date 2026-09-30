@@ -18,6 +18,12 @@ Un álbum de recuerdos interactivo: un libro que se abre, las fotos una por una 
 | `qr/` | El QR fijo (PNG, SVG y versiones para imprimir). `tools/make_qr.py` lo regenera y verifica. |
 | `.github/workflows/pages.yml` | Cada cambio en `main` se revisa (lint + pruebas), se construye y se publica solo. |
 
+## Agregar fotos desde el libro (el «+»)
+
+En el visor, abre las miniaturas (botón de cuadritos): al final, después de la última foto, está el **«+ Agregar»**.
+Eliges fotos del celular o computador, puedes quitar alguna, y luego **Publicar** (pide la llave de GitHub, ver abajo) o **Guardar y seguir en el editor** si prefieres ordenarlas antes.
+Al publicar, el libro salta directamente a la primera foto nueva.
+
 ## Modo edición — cómo usarlo
 
 Abre **https://elrecreodeadanzonat-glitch.github.io/admin/** (no hay enlace visible desde el libro).
