@@ -13,6 +13,11 @@ import { PhotoCard } from './PhotoCard';
 import { PublishDialog } from './PublishDialog';
 import { Viewer } from '../components/Viewer';
 import type { NewFile } from './github';
+import { Comments } from '../components/Comments';
+import { CloudError, type CloudPhoto, type ModChange } from '../lib/cloud';
+import { CloudStore, cloudPhotoAsPage, commentsByPhoto, useCloudState, type LocalComment } from '../lib/cloudStore';
+import { FamilyCard } from './FamilyCard';
+import { ModCodeDialog } from './ModCodeDialog';
 
 type BlobUrls = Record<string, Partial<Record<SizeKind, string>>>;
 const KINDS: SizeKind[] = ['full', 'md', 'thumb'];
@@ -23,9 +28,9 @@ export default function AdminApp() {
   const [h, dispatch] = useReducer(historyReducer, initHistory([]));
   const [draftOffer, setDraftOffer] = useState<Draft | null>(null);
   const [blobUrls, setBlobUrls] = useState<BlobUrls>({});
-  const [tab, setTab] = useState<'photos' | 'trash'>('photos');
+  const [tab, setTab] = useState<'photos' | 'family' | 'trash'>('photos');
   const [selected, setSelected] = useState<Set<string>>(new Set());
-  const [confirm, setConfirm] = useState<{ text: string; onYes: () => void } | null>(null);
+  const [confirm, setConfirm] = useState<{ text: string; yes?: string; onYes: () => void } | null>(null);
   const [focal, setFocal] = useState<Photo | null>(null);
   const [preview, setPreview] = useState(false);
   const [publishing, setPublishing] = useState(false);
@@ -36,6 +41,17 @@ export default function AdminApp() {
   const [showHelp, setShowHelp] = useState(true);
   const fileRef = useRef<HTMLInputElement>(null);
   const ready = useRef(false);
+
+  // ---- what the family added from the book (Firestore): photos + comments ----
+  const cloud = useMemo(() => new CloudStore(), []);
+  const cloudState = useCloudState(cloud);
+  useEffect(() => {
+    cloud.start();
+    return () => cloud.stop();
+  }, [cloud]);
+  const [modCode, setModCode] = useState<string | null>(null); // memory only — never persisted
+  const [askCode, setAskCode] = useState<{ resolve: (c: string) => void; reject: (e: Error) => void } | null>(null);
+  const [commentsFor, setCommentsFor] = useState<{ photo: Photo; number: number } | null>(null);
 
   // ---- load published gallery + offer an existing draft ----
   useEffect(() => {
@@ -59,6 +75,52 @@ export default function AdminApp() {
   const publishedIds = useMemo(() => new Set(published?.photos.map((p) => p.id)), [published]);
   const newPhotos = useMemo(() => photos.filter((p) => !publishedIds.has(p.id)), [photos, publishedIds]);
   const dirty = !!published && isDirty(published.photos, photos);
+
+  const commentMap = useMemo(() => commentsByPhoto(cloudState?.comments ?? []), [cloudState]);
+  const familyPhotos = useMemo(() => cloudState?.photos ?? [], [cloudState]);
+  const familyVisible = useMemo(() => familyPhotos.filter((p) => !p.hidden), [familyPhotos]);
+  const familyPages = useMemo(
+    () => (cloudState ? familyVisible.map((c, i) => cloudPhotoAsPage(c, cloudState, visible.length + i + 1)) : []),
+    [cloudState, familyVisible, visible.length],
+  );
+  const familyPage = (c: CloudPhoto) => (c.hidden ? null : visible.length + familyVisible.indexOf(c) + 1);
+
+  // moderation needs the family code: asked once per tab, kept in memory
+  const ensureCode = useCallback(
+    () => (modCode ? Promise.resolve(modCode) : new Promise<string>((resolve, reject) => setAskCode({ resolve, reject }))),
+    [modCode],
+  );
+  const withCode = useCallback(
+    async (fn: (code: string) => Promise<void>) => {
+      const code = await ensureCode();
+      try {
+        await fn(code);
+      } catch (e) {
+        if (e instanceof CloudError && e.status === 403) {
+          setModCode(null);
+          throw new Error('El código no fue aceptado. Escríbelo de nuevo.', { cause: e });
+        }
+        throw new Error(e instanceof CloudError && e.status === 0 ? 'No hay conexión. Inténtalo en un momento.' : 'No se pudo guardar el cambio.', { cause: e });
+      }
+    },
+    [ensureCode],
+  );
+  const moderateComment = useCallback(
+    (c: LocalComment, hidden: boolean) => withCode((code) => cloud.moderate({ kind: 'comments', id: c.id }, { hidden }, code)),
+    [withCode, cloud],
+  );
+  const changeFamily = (c: CloudPhoto, change: ModChange) => withCode((code) => cloud.moderate({ kind: 'photos', id: c.id }, change, code));
+  const askHideFamily = (c: CloudPhoto) =>
+    setConfirm({
+      text: '¿Ocultar esta foto del libro? Nadie más la verá, pero no se borra: podrás volver a mostrarla.',
+      yes: 'Sí, ocultar',
+      onYes: () => void changeFamily(c, { hidden: true }).catch((e: Error) => setAddErrors([e.message])),
+    });
+  const openFamilyComments = (c: CloudPhoto) => {
+    if (!cloudState) return;
+    const n = familyPage(c) ?? 0;
+    setCommentsFor({ photo: cloudPhotoAsPage(c, cloudState, n), number: n });
+  };
 
   // ---- blob URLs for photos added locally (not yet published) ----
   const ensureBlobUrls = useCallback(async (ids: string[]) => {
@@ -249,6 +311,7 @@ export default function AdminApp() {
           <p>
             Arrastra las fotos por el asa <b>⋮⋮</b> (o usa las flechas) para cambiar el orden. «Quitar» manda la foto a la papelera: no se borra.
             Los cambios se guardan como <b>borrador en este dispositivo</b>; nadie más los ve hasta que pulses <b>Publicar cambios</b>.
+            El botón de burbuja de cada foto abre sus comentarios; las fotos que la familia agrega desde el libro están en <b>De la familia</b>.
           </p>
           <button className="btn icon" onClick={() => setShowHelp(false)} aria-label="Ocultar ayuda"><X /></button>
         </div>
@@ -271,6 +334,7 @@ export default function AdminApp() {
       <div className="toolbar">
         <div className="tabs" role="tablist">
           <button role="tab" aria-selected={tab === 'photos'} onClick={() => setTab('photos')}>Fotos ({visible.length})</button>
+          <button role="tab" aria-selected={tab === 'family'} onClick={() => setTab('family')} data-testid="family-tab">De la familia ({familyVisible.length})</button>
           <button role="tab" aria-selected={tab === 'trash'} onClick={() => setTab('trash')} data-testid="trash-tab">Papelera ({trash.length})</button>
         </div>
         {tab === 'photos' ? (
@@ -302,11 +366,35 @@ export default function AdminApp() {
                   onOp={onOp}
                   onAskHide={askHide}
                   onFocal={setFocal}
+                  comments={commentMap.get(p.id)?.length ?? 0}
+                  onComments={(ph) => setCommentsFor({ photo: withLocalUrls(ph), number: i + 1 })}
                 />
               ))}
             </ol>
           </SortableContext>
         </DndContext>
+      ) : tab === 'family' ? (
+        <>
+          <p className="family-help">
+            Estas fotos las agregó la familia desde el libro (con el <b>«+»</b> de las miniaturas). Aparecen al final, después de la foto {visible.length}.
+            Aquí puedes leer sus comentarios, girarlas u ocultarlas con el código de la familia. No se borra nada.
+          </p>
+          <ol className="grid">
+            {!cloudState?.ready ? <li className="empty">Cargando…</li> : familyPhotos.length === 0 ? <li className="empty">Todavía nadie ha agregado fotos desde el libro.</li> : null}
+            {cloudState?.ready && !cloudState.online ? <li className="empty">No hay conexión con la base de datos de la familia.</li> : null}
+            {familyPhotos.map((c) => (
+              <FamilyCard
+                key={c.id}
+                photo={c}
+                page={familyPage(c)}
+                comments={commentMap.get(c.id)?.length ?? 0}
+                onComments={openFamilyComments}
+                onChange={changeFamily}
+                onAskHide={askHideFamily}
+              />
+            ))}
+          </ol>
+        </>
       ) : (
         <ol className="grid">
           {trash.length === 0 ? <li className="empty">La papelera está vacía.</li> : null}
@@ -323,7 +411,7 @@ export default function AdminApp() {
             <p>{confirm.text}</p>
             <div className="modal-actions">
               <button className="btn ghost" onClick={() => setConfirm(null)} autoFocus>Cancelar</button>
-              <button className="btn danger" onClick={() => { confirm.onYes(); setConfirm(null); }} data-testid="confirm-yes">Sí, quitar</button>
+              <button className="btn danger" onClick={() => { confirm.onYes(); setConfirm(null); }} data-testid="confirm-yes">{confirm.yes ?? 'Sí, quitar'}</button>
             </div>
           </div>
         </div>
@@ -335,7 +423,9 @@ export default function AdminApp() {
         <div className="preview-overlay">
           <button className="preview-close" onClick={() => setPreview(false)} aria-label="Cerrar vista previa"><X /> Cerrar vista previa</button>
           <Viewer
-            photos={visible.map(withLocalUrls)}
+            photos={[...visible.map(withLocalUrls), ...familyPages]}
+            cloud={cloud}
+            onModerateComment={moderateComment}
             music={{ started: false, playing: false, muted: true, volume: 0, trackTitle: '', error: null }}
             onToggleMute={() => undefined}
             onVolume={() => undefined}
@@ -343,6 +433,17 @@ export default function AdminApp() {
             embedded
           />
         </div>
+      ) : null}
+
+      {commentsFor ? (
+        <Comments photo={commentsFor.photo} number={commentsFor.number} store={cloud} onClose={() => setCommentsFor(null)} onModerate={moderateComment} />
+      ) : null}
+
+      {askCode ? (
+        <ModCodeDialog
+          onOk={(code) => { setModCode(code); askCode.resolve(code); setAskCode(null); }}
+          onCancel={() => { askCode.reject(new Error('Hace falta el código de la familia para hacer ese cambio.')); setAskCode(null); }}
+        />
       ) : null}
 
       {publishing && newFiles ? (

@@ -101,3 +101,20 @@ body { overflow: auto; background: var(--cream); }
   .head-actions .btn.primary { flex: 1 1 100%; justify-content: center; }
   .help { font-size: .9rem; }
 }
+
+/* comments + photos the family added from the book */
+.card-comments {
+  margin-left: auto; display: inline-flex; align-items: center; gap: 4px; min-height: 36px; padding: 0 10px;
+  border: 0; border-radius: 10px; background: #F6ECDF; font-weight: 800; font-size: .88rem; cursor: pointer;
+}
+.card-comments svg { width: 17px; height: 17px; }
+.card-comments.has { background: #FFF1D6; color: var(--terracotta-deep); }
+.card-top .card-comments + .check { margin-left: 0; }
+.badge.fam { background: var(--mustard); color: var(--ink); }
+.family-help { margin: 4px 0 0; padding: 0 16px; color: var(--ink-soft); line-height: 1.5; max-width: 60rem; }
+.fam-meta { margin: 0; font-size: .88rem; color: var(--ink-soft); overflow-wrap: anywhere; }
+.fam-error { margin: 0; color: #A5301F; font-weight: 650; font-size: .88rem; }
+.fam-actions { grid-template-columns: 44px 1fr; }
+.fam-actions .restore { grid-column: auto; }
+.card-actions button.wide { display: flex; gap: 8px; justify-content: center; font-weight: 700; }
+.card.family.is-hidden .card-img { opacity: .45; }

@@ -93,17 +93,64 @@ export function newPhotoId(): string {
   return `n${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
 }
 
-/** Turn a picked file into web versions (<= 2200 / 1280 / 360 px). Pixels are only resized and compressed. */
-export async function processImage(file: File, order: number): Promise<ProcessedImage> {
+async function open(file: File): Promise<ImageBitmap | HTMLImageElement> {
   if (!file.type.startsWith('image/') && !/\.(jpe?g|png|webp|heic|heif|gif)$/i.test(file.name)) {
     throw new Error(`«${file.name}» no es una imagen`);
   }
-  let bmp: ImageBitmap | HTMLImageElement;
   try {
-    bmp = await decode(file);
+    return await decode(file);
   } catch {
     throw new Error(`No se pudo abrir «${file.name}». Si es HEIC, conviértela a JPG primero.`);
   }
+}
+
+function blobToDataUrl(b: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const r = new FileReader();
+    r.onload = () => resolve(r.result as string);
+    r.onerror = () => reject(r.error ?? new Error('No se pudo leer la imagen'));
+    r.readAsDataURL(b);
+  });
+}
+
+export interface CloudImage {
+  /** data: URL, <= 1600 px, small enough for one Firestore document */
+  image: string;
+  thumb: string;
+  width: number;
+  height: number;
+  color: string;
+  name: string;
+}
+
+const CLOUD_IMAGE_MAX = 950_000;
+const CLOUD_THUMB_MAX = 55_000;
+
+/** A picked photo, ready to be added from the book: one version up to 1600 px plus a thumbnail, as data: URLs. */
+export async function prepareCloudImage(file: File): Promise<CloudImage> {
+  const bmp = await open(file);
+  try {
+    const { w, h } = dims(bmp);
+    let canvas: HTMLCanvasElement | null = null;
+    let image = '';
+    for (const [side, q] of [[1600, 0.82], [1600, 0.72], [1400, 0.68], [1200, 0.64], [1000, 0.6]] as const) {
+      if (!canvas || Math.max(canvas.width, canvas.height) !== Math.min(side, Math.max(w, h))) canvas = resize(bmp, w, h, side);
+      image = await blobToDataUrl((await encode(canvas, q)).blob);
+      if (image.length <= CLOUD_IMAGE_MAX) break;
+    }
+    if (!canvas || image.length > CLOUD_IMAGE_MAX) throw new Error(`«${file.name}» es demasiado grande`);
+    const small = resize(canvas, canvas.width, canvas.height, 320);
+    let thumb = await blobToDataUrl((await encode(small, 0.7)).blob);
+    if (thumb.length > CLOUD_THUMB_MAX) thumb = await blobToDataUrl((await encode(small, 0.45)).blob);
+    return { image, thumb, width: canvas.width, height: canvas.height, color: averageColor(canvas), name: file.name };
+  } finally {
+    if ('close' in bmp) bmp.close();
+  }
+}
+
+/** Turn a picked file into web versions (<= 2200 / 1280 / 360 px). Pixels are only resized and compressed. */
+export async function processImage(file: File, order: number): Promise<ProcessedImage> {
+  const bmp = await open(file);
   const { w, h } = dims(bmp);
   const id = newPhotoId();
   const full = resize(bmp, w, h, SIZES.full);

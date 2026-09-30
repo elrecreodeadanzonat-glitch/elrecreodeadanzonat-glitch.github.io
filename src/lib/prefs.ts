@@ -29,3 +29,23 @@ export function savePrefs(p: Prefs): void {
     /* ignore */
   }
 }
+
+// The name people sign comments and photos with, remembered on this device only.
+const NAME_KEY = 'libro-de-mama:nombre';
+
+export function loadName(): string {
+  try {
+    return (localStorage.getItem(NAME_KEY) ?? '').slice(0, 60);
+  } catch {
+    return '';
+  }
+}
+
+export function saveName(name: string): void {
+  try {
+    if (name.trim()) localStorage.setItem(NAME_KEY, name.trim().slice(0, 60));
+    else localStorage.removeItem(NAME_KEY);
+  } catch {
+    /* ignore */
+  }
+}

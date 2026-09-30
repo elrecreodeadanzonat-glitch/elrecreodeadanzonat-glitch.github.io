@@ -4,6 +4,7 @@ import { assetUrl, loadGallery, visiblePhotos } from './lib/gallery';
 import { MusicPlayer, type MusicState } from './lib/music';
 import { loadPrefs, savePrefs } from './lib/prefs';
 import { PLAYLIST } from './config';
+import { CloudStore, cloudPhotoAsPage, useCloudState } from './lib/cloudStore';
 import { Cover } from './components/Cover';
 import { Viewer } from './components/Viewer';
 import { Outro } from './components/Outro';
@@ -19,15 +20,20 @@ export default function App() {
   const [run, setRun] = useState(0);
   const [startIndex, setStartIndex] = useState(0);
   const [adding, setAdding] = useState<File[] | null>(null);
-  const [pendingJump, setPendingJump] = useState<string | null>(null);
   const player = useMemo(() => {
     const p = loadPrefs();
     return new MusicPlayer(PLAYLIST, p.volume, p.muted);
   }, []);
   const [music, setMusic] = useState<MusicState>(player.getState());
+  const cloud = useMemo(() => new CloudStore(), []);
+  const cloudState = useCloudState(cloud);
   const coverPreloaded = useRef(false);
 
   useEffect(() => player.subscribe(setMusic), [player]);
+  useEffect(() => {
+    cloud.start();
+    return () => cloud.stop();
+  }, [cloud]);
   useEffect(() => savePrefs({ volume: music.volume, muted: music.muted }), [music.volume, music.muted]);
 
   useEffect(() => {
@@ -40,7 +46,16 @@ export default function App() {
     return () => ac.abort();
   }, []);
 
-  const photos: Photo[] = useMemo(() => (gallery ? visiblePhotos(gallery) : []), [gallery]);
+  // the book: photos from gallery.json, then the ones the family added from the «+» (oldest first)
+  const photos: Photo[] = useMemo(() => {
+    if (!gallery) return [];
+    const book = visiblePhotos(gallery);
+    const known = new Set(book.map((p) => p.id));
+    const added = cloudState
+      ? cloudState.photos.filter((c) => !c.hidden && !known.has(c.id)).map((c, i) => cloudPhotoAsPage(c, cloudState, book.length + i + 1))
+      : [];
+    return [...book, ...added];
+  }, [gallery, cloudState]);
 
   // warm up only the first photo while the cover is on screen
   useEffect(() => {
@@ -62,24 +77,14 @@ export default function App() {
 
   const last = photos[photos.length - 1];
 
-  // after publishing from the «+» sheet: load the new gallery; when the sheet closes, show the first new photo
-  const onPublishedNew = async (firstNewId: string) => {
-    try {
-      setGallery(await loadGallery());
-      setPendingJump(firstNewId);
-    } catch {
-      /* the new photos will show on the next visit */
-    }
-  };
-  const closeAdding = () => {
+  // the «+» sheet closed: if photos were added, open the book on the first of them
+  const closeAdding = (firstNewId?: string) => {
     setAdding(null);
-    if (pendingJump) {
-      const i = photos.findIndex((p) => p.id === pendingJump);
-      setPendingJump(null);
-      if (i >= 0) {
-        setStartIndex(i);
-        setRun((r) => r + 1);
-      }
+    const i = firstNewId ? photos.findIndex((p) => p.id === firstNewId) : -1;
+    if (i >= 0) {
+      setStartIndex(i);
+      setRun((r) => r + 1);
+      setPhase('viewer');
     }
   };
 
@@ -99,11 +104,12 @@ export default function App() {
           startIndex={startIndex}
           onAddFiles={setAdding}
           blocked={!!adding}
+          cloud={cloud}
         />
       )}
-      {adding && gallery ? (
+      {adding ? (
         <Suspense fallback={null}>
-          <AddPhotos files={adding} gallery={gallery} onClose={closeAdding} onPublished={(id) => void onPublishedNew(id)} />
+          <AddPhotos files={adding} store={cloud} onClose={closeAdding} />
         </Suspense>
       ) : null}
       {phase === 'outro' && (

@@ -1,13 +1,15 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import {
   ChevronLeft, ChevronRight, Pause, Play, Volume2, VolumeX, ZoomIn, ZoomOut, Minimize2, Maximize, Minimize,
-  LayoutGrid, X, Expand, Shrink, Plus,
+  LayoutGrid, X, Expand, Shrink, Plus, MessageCircle,
 } from 'lucide-react';
 import type { FitMode, Photo } from '../lib/types';
 import { assetUrl, displayAspect } from '../lib/gallery';
 import { useAutoplay } from '../lib/useAutoplay';
 import { useGestures } from '../lib/useGestures';
 import type { MusicState } from '../lib/music';
+import { commentsByPhoto, useCloudState, type CloudStore, type LocalComment } from '../lib/cloudStore';
+import { Comments } from './Comments';
 
 export const PHOTO_SECONDS = 15;
 const TRANSITION_MS = 700;
@@ -25,6 +27,10 @@ interface Props {
   onAddFiles?: (files: File[]) => void;
   /** a dialog is open on top: stop autoplay, gestures and keyboard */
   blocked?: boolean;
+  /** comments (and family photos' full images); omitted → no comment button */
+  cloud?: CloudStore;
+  /** editor only: hide / show comments */
+  onModerateComment?: (c: LocalComment, hidden: boolean) => Promise<void>;
 }
 
 interface Layer { photo: Photo; key: number; dir: 1 | -1 | 0; leaving?: boolean }
@@ -47,7 +53,7 @@ function preload(p: Photo | undefined, sizes: string) {
   img.src = assetUrl(p.src);
 }
 
-export function Viewer({ photos, music, onToggleMute, onVolume, onFinish, startIndex = 0, embedded = false, onAddFiles, blocked = false }: Props) {
+export function Viewer({ photos, music, onToggleMute, onVolume, onFinish, startIndex = 0, embedded = false, onAddFiles, blocked: blockedFromOutside = false, cloud, onModerateComment }: Props) {
   const n = photos.length;
   const [index, setIndex] = useState(() => Math.min(Math.max(0, startIndex), Math.max(0, n - 1)));
   const [playing, setPlaying] = useState(true);
@@ -62,6 +68,11 @@ export function Viewer({ photos, music, onToggleMute, onVolume, onFinish, startI
   const [uiHidden, setUiHidden] = useState(false);
   const [volOpen, setVolOpen] = useState(false);
   const [stage, setStage] = useState({ w: 0, h: 0 });
+  const [commentsOpen, setCommentsOpen] = useState(false);
+  const blocked = blockedFromOutside || commentsOpen;
+  const cloudState = useCloudState(cloud);
+  const comments = useMemo(() => (cloudState ? commentsByPhoto(cloudState.comments) : null), [cloudState]);
+  const byId = useMemo(() => new Map(photos.map((p) => [p.id, p])), [photos]);
   const layerKey = useRef(0);
   const hideTimer = useRef<number | undefined>(undefined);
   const rootRef = useRef<HTMLDivElement>(null);
@@ -187,7 +198,7 @@ export function Viewer({ photos, music, onToggleMute, onVolume, onFinish, startI
   });
 
   // ---- 15 s autoplay ----
-  const running = playing && !blocked && !trayOpen && !isZoomed && !!(photo && loaded[photo.id]) && !transitioning && n > 0;
+  const running = playing && !blocked && !trayOpen && !isZoomed && !!(photo && loaded[photo.id] && !photo.pending) && !transitioning && n > 0;
   const autoNext = useCallback(() => {
     if (index >= n - 1) onFinish();
     else go(index + 1, 1);
@@ -205,6 +216,19 @@ export function Viewer({ photos, music, onToggleMute, onVolume, onFinish, startI
   useEffect(() => {
     preload(photos[index + 1], sizes);
   }, [index, photos, sizes]);
+
+  // family photos: fetch the full image of the current and the next two
+  useEffect(() => {
+    if (!cloud) return;
+    for (const p of [photos[index], photos[index + 1], photos[index + 2]]) {
+      if (p?.pending) cloud.loadImage(p.id).catch(() => undefined);
+    }
+  }, [cloud, index, photos]);
+
+  const closeComments = useCallback(() => {
+    setCommentsOpen(false);
+    bumpInteraction();
+  }, [bumpInteraction]);
 
   // ---- stage size ----
   useLayoutEffect(() => {
@@ -286,7 +310,7 @@ export function Viewer({ photos, music, onToggleMute, onVolume, onFinish, startI
       >
         {layers.map((l) => {
           const isCur = !l.leaving;
-          const p = l.photo;
+          const p = byId.get(l.photo.id) ?? l.photo;
           const pf: FitMode = fitOverride ?? p.fitMode ?? 'contain';
           const sideways = p.rotation === 90 || p.rotation === 270;
           const innerW = frame.w - frame.pad * 2;
@@ -315,7 +339,7 @@ export function Viewer({ photos, music, onToggleMute, onVolume, onFinish, startI
                 }}
               >
                 <div className="page-inner">
-                  {!loaded[p.id] && <div className="page-loading" aria-hidden="true" />}
+                  {(!loaded[p.id] || p.pending) && <div className="page-loading" aria-hidden="true" />}
                   <img
                     src={assetUrl(p.src)}
                     srcSet={srcSetFor(p)}
@@ -325,6 +349,7 @@ export function Viewer({ photos, music, onToggleMute, onVolume, onFinish, startI
                     height={p.height}
                     draggable={false}
                     decoding="async"
+                    className={p.pending ? 'is-pending' : undefined}
                     style={imgStyle}
                     data-photo-id={p.id}
                     onLoad={() => setLoaded((m) => (m[p.id] ? m : { ...m, [p.id]: true }))}
@@ -337,7 +362,17 @@ export function Viewer({ photos, music, onToggleMute, onVolume, onFinish, startI
         })}
       </div>
 
-      {photo.caption ? <p className="caption">{photo.caption}</p> : null}
+      {photo.caption || photo.addedBy || cloud ? (
+        <div className="photo-meta">
+          {photo.caption ? <p className="caption">{photo.caption}</p> : null}
+          {photo.addedBy || cloud ? (
+            <div className="meta-row">
+              {photo.addedBy ? <span className="shared-by">Compartida por {photo.addedBy}</span> : null}
+              {cloud ? <CommentPill list={comments?.get(photo.id) ?? []} onOpen={() => setCommentsOpen(true)} /> : null}
+            </div>
+          ) : null}
+        </div>
+      ) : null}
 
       <nav className="controls" aria-label="Controles del libro">
         <div className="controls-row main">
@@ -412,6 +447,9 @@ export function Viewer({ photos, music, onToggleMute, onVolume, onFinish, startI
             >
               <img src={assetUrl(p.thumb)} alt="" loading="lazy" decoding="async" style={{ transform: `rotate(${p.rotation}deg)` }} />
               <span>{i + 1}</span>
+              {comments?.get(p.id)?.length ? (
+                <i className="thumb-comments" aria-label={`${comments.get(p.id)!.length} comentarios`}><MessageCircle aria-hidden="true" />{comments.get(p.id)!.length}</i>
+              ) : null}
             </button>
           ))}
           {trayOpen && onAddFiles ? (
@@ -434,12 +472,43 @@ export function Viewer({ photos, music, onToggleMute, onVolume, onFinish, startI
               e.target.value = '';
               if (list.length) {
                 setTrayOpen(false);
+                // the «Agregar» sheet lives outside the viewer: leave fullscreen so it can be seen
+                if (document.fullscreenElement) void document.exitFullscreen().catch(() => undefined);
+                setImmersive(false);
                 onAddFiles(list);
               }
             }}
           />
         ) : null}
       </div>
+
+      {commentsOpen && cloud ? (
+        <Comments photo={photo} number={index + 1} store={cloud} onClose={closeComments} onModerate={onModerateComment} />
+      ) : null}
     </div>
+  );
+}
+
+/** the small «speech bubble» under each photo: count + the latest comment */
+function CommentPill({ list, onOpen }: { list: LocalComment[]; onOpen: () => void }) {
+  const n = list.length;
+  const last = list[n - 1];
+  return (
+    <button
+      className={`comment-pill${n ? ' has' : ''}`}
+      onClick={onOpen}
+      aria-label={n ? `Ver los ${n} comentarios de esta foto y comentar` : 'Escribir un comentario sobre esta foto'}
+      data-testid="comments-open"
+    >
+      <MessageCircle aria-hidden="true" />
+      {n ? (
+        <>
+          <b data-testid="comments-count">{n}</b>
+          <span className="pill-last">{last.author || 'Alguien'}: {last.text}</span>
+        </>
+      ) : (
+        <span>Comentar</span>
+      )}
+    </button>
   );
 }

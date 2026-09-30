@@ -1,161 +1,176 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
-import { ImagePlus, Loader2, UploadCloud, PencilLine, X } from 'lucide-react';
-import type { Gallery, Photo } from '../lib/types';
-import { renumber, sortByOrder } from '../lib/gallery';
-import { processImage, type ProcessedImage } from '../admin/images';
-import { loadDraft, putBlob, saveDraft } from '../admin/draftDb';
-import { applyOp } from '../admin/store';
-import { PublishDialog } from '../admin/PublishDialog';
-import type { NewFile } from '../admin/github';
+import { useEffect, useRef, useState } from 'react';
+import { ImagePlus, Loader2, X, Check, PartyPopper, RotateCcw } from 'lucide-react';
+import { prepareCloudImage, type CloudImage } from '../admin/images';
+import type { CloudStore } from '../lib/cloudStore';
+import { loadName, saveName } from '../lib/prefs';
+import { LIMITS } from '../lib/cloud';
 import '../styles/dialog.css';
 
 interface Props {
   files: File[];
-  gallery: Gallery;
-  onClose: () => void;
-  /** called after the new photos are live; receives the id of the first new photo */
-  onPublished: (firstNewId: string) => void;
+  store: CloudStore;
+  /** closes the sheet; with the id of the first photo added, the book jumps to it */
+  onClose: (firstNewId?: string) => void;
 }
 
-/**
- * «+» in the thumbnails tray: prepare new photos (resize/compress in the browser, EXIF orientation honoured)
- * and either publish them right away (needs the family's GitHub key) or hand them over to the editor as a draft.
- */
-export default function AddPhotos({ files, gallery, onClose, onPublished }: Props) {
-  const [items, setItems] = useState<(ProcessedImage & { preview: string })[]>([]);
-  const [progress, setProgress] = useState(0);
-  const [total, setTotal] = useState(files.length);
-  const [errors, setErrors] = useState<string[]>([]);
-  const [busy, setBusy] = useState(true);
-  const [publishing, setPublishing] = useState(false);
-  const [token, setToken] = useState(''); // memory only
-  const [done, setDone] = useState(false);
-  const live = useRef(items);
-  const moreRef = useRef<HTMLInputElement>(null);
+type Item = CloudImage & { key: string; state: 'ready' | 'uploading' | 'done' | 'failed'; id?: string; createdAt?: string };
+type Phase = 'preparing' | 'ready' | 'uploading' | 'done' | 'failed';
 
-  const addFiles = async (list: File[]) => {
-    setBusy(true);
-    setTotal(list.length);
+/**
+ * «+» in the thumbnails tray. Made for everyone, grandparents included:
+ * pick photos → one big button → «¡Listo!». No keys, no accounts, no editor.
+ */
+export default function AddPhotos({ files, store, onClose }: Props) {
+  const [items, setItems] = useState<Item[]>([]);
+  const [phase, setPhase] = useState<Phase>('preparing');
+  const [preparing, setPreparing] = useState({ done: 0, total: files.length });
+  const [errors, setErrors] = useState<string[]>([]);
+  const [name, setName] = useState(loadName);
+  const moreRef = useRef<HTMLInputElement>(null);
+  const itemsRef = useRef(items);
+  useEffect(() => {
+    itemsRef.current = items;
+  }, [items]);
+
+  const prepare = async (list: File[]) => {
+    setPhase('preparing');
+    setPreparing({ done: 0, total: list.length });
     const errs: string[] = [];
-    const out: (ProcessedImage & { preview: string })[] = [];
     for (let i = 0; i < list.length; i++) {
-      setProgress(i + 1);
       try {
-        const img = await processImage(list[i], 0);
-        out.push({ ...img, preview: URL.createObjectURL(img.blobs.thumb) });
+        const img = await prepareCloudImage(list[i]);
+        setItems((cur) => [...cur, { ...img, key: `${Date.now()}-${i}-${Math.random()}`, state: 'ready' }]);
       } catch (e) {
         errs.push((e as Error).message);
       }
+      setPreparing({ done: i + 1, total: list.length });
     }
-    setItems((cur) => [...cur, ...out]);
     setErrors((cur) => [...cur, ...errs]);
-    setBusy(false);
+    setPhase('ready');
   };
 
   const started = useRef(false);
   useEffect(() => {
     if (started.current) return;
     started.current = true;
-    // processing runs asynchronously (canvas work), then stores the results
-    void addFiles(files);
+    // decoding and resizing runs asynchronously (canvas), then stores the results
+    void prepare(files);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // free the preview object URLs when the sheet closes
-  useEffect(() => {
-    live.current = items;
-  }, [items]);
-  useEffect(() => () => live.current.forEach((it) => URL.revokeObjectURL(it.preview)), []);
-
-  /** published photos + the new ones at the end of the book */
-  const merged: Photo[] = useMemo(
-    () => applyOp(renumber(sortByOrder(gallery.photos)), { type: 'add', photos: items.map((it) => it.photo) }),
-    [gallery.photos, items],
-  );
-  const newFiles: NewFile[] = useMemo(
-    () => items.flatMap((it) => [
-      { path: `public/${it.photo.src}`, blob: it.blobs.full },
-      { path: `public/${it.photo.srcMd}`, blob: it.blobs.md },
-      { path: `public/${it.photo.thumb}`, blob: it.blobs.thumb },
-    ]),
-    [items],
-  );
-
-  const toEditor = async () => {
-    setBusy(true);
-    for (const it of items) {
-      await putBlob(`${it.photo.id}:full`, it.blobs.full);
-      await putBlob(`${it.photo.id}:md`, it.blobs.md);
-      await putBlob(`${it.photo.id}:thumb`, it.blobs.thumb);
+  const upload = async () => {
+    saveName(name);
+    setErrors([]);
+    setPhase('uploading');
+    let failed = 0;
+    for (const it of itemsRef.current) {
+      if (it.state === 'done') continue;
+      setItems((cur) => cur.map((x) => (x.key === it.key ? { ...x, state: 'uploading' } : x)));
+      try {
+        const saved = await store.addPhoto({ image: it.image, thumb: it.thumb, width: it.width, height: it.height, color: it.color, author: name });
+        setItems((cur) => cur.map((x) => (x.key === it.key ? { ...x, state: 'done', id: saved.id, createdAt: saved.createdAt } : x)));
+      } catch {
+        failed++;
+        setItems((cur) => cur.map((x) => (x.key === it.key ? { ...x, state: 'failed' } : x)));
+      }
     }
-    const existing = await loadDraft().catch(() => undefined);
-    const base = existing && existing.baseRevision === gallery.revision ? existing.photos : gallery.photos;
-    const photos = applyOp(renumber(sortByOrder(base)), { type: 'add', photos: items.map((it) => it.photo) });
-    await saveDraft({ baseRevision: gallery.revision, photos, savedAt: new Date().toISOString() });
-    window.location.href = `${import.meta.env.BASE_URL}admin/`;
+    setPhase(failed ? 'failed' : 'done');
   };
 
-  if (publishing) {
+  const n = items.length;
+  const doneItems = items.filter((x) => x.state === 'done');
+  // the one that comes first in the book (after a retry, upload order and pick order differ)
+  const firstNew = [...doneItems].sort((x, y) => Date.parse(x.createdAt ?? '') - Date.parse(y.createdAt ?? ''))[0]?.id;
+  const sending = items.findIndex((x) => x.state === 'uploading') + 1 || doneItems.length;
+  const locked = phase === 'uploading';
+  const fotos = (k: number) => (k === 1 ? '1 foto' : `${k} fotos`);
+
+  if (phase === 'done') {
     return (
-      <PublishDialog
-        photos={merged}
-        newFiles={newFiles}
-        baseRevision={gallery.revision}
-        token={token}
-        setToken={setToken}
-        onClose={() => (done ? onClose() : setPublishing(false))}
-        onPublished={() => { setDone(true); onPublished(items[0].photo.id); }}
-      />
+      <div className="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="add-title" data-testid="add-photos">
+        <div className="modal add-sheet done-sheet">
+          <div className="done-mark" aria-hidden="true"><PartyPopper /></div>
+          <h2 id="add-title">¡Listo!</h2>
+          <p className="big-text" data-testid="add-done">
+            {doneItems.length === 1 ? 'Tu foto ya está en el libro.' : `Tus ${doneItems.length} fotos ya están en el libro.`}
+            <br />Todos la{doneItems.length === 1 ? '' : 's'} pueden ver desde ahora.
+          </p>
+          <ul className="add-grid done" aria-hidden="true">
+            {doneItems.slice(0, 6).map((it) => <li key={it.key}><img src={it.thumb} alt="" /></li>)}
+          </ul>
+          <button className="btn primary huge" onClick={() => onClose(firstNew)} autoFocus data-testid="add-see">
+            Ver {doneItems.length === 1 ? 'mi foto' : 'mis fotos'}
+          </button>
+        </div>
+      </div>
     );
   }
 
-  const n = items.length;
   return (
     <div className="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="add-title" data-testid="add-photos">
-      <div className="modal">
-        <button className="modal-x" onClick={onClose} disabled={busy} aria-label="Cerrar"><X /></button>
-        <h2 id="add-title">Agregar fotos al libro</h2>
-        <p>Se agregan al final, después de la foto {gallery.photos.filter((p) => !p.hidden).length}. Solo se reducen de tamaño; no se recortan ni se retocan.</p>
+      <div className="modal add-sheet">
+        <button className="modal-x" onClick={() => onClose(firstNew)} disabled={locked} aria-label="Cerrar"><X /></button>
+        <h2 id="add-title">Agregar al libro</h2>
 
-        <ul className="add-grid">
+        <ul className="add-grid big">
           {items.map((it) => (
-            <li key={it.photo.id}>
-              <img src={it.preview} alt="" />
-              <button
-                className="add-remove"
-                onClick={() => { URL.revokeObjectURL(it.preview); setItems((cur) => cur.filter((x) => x !== it)); }}
-                aria-label={`Quitar ${it.photo.originalFilename}`}
-                disabled={busy}
-              >
-                <X />
-              </button>
+            <li key={it.key} className={`is-${it.state}`}>
+              <img src={it.thumb} alt="" />
+              {it.state === 'uploading' ? <span className="add-state"><Loader2 className="spin" /></span> : null}
+              {it.state === 'done' ? <span className="add-state ok"><Check /></span> : null}
+              {it.state === 'failed' ? <span className="add-state bad">!</span> : null}
+              {it.state === 'ready' && !locked ? (
+                <button className="add-remove" onClick={() => setItems((cur) => cur.filter((x) => x.key !== it.key))} aria-label={`Quitar ${it.name}`}>
+                  <X />
+                </button>
+              ) : null}
             </li>
           ))}
-          {busy ? (
-            <li className="add-busy" aria-live="polite"><Loader2 className="spin" /> <span>Preparando {progress} de {total}…</span></li>
-          ) : (
+          {phase === 'preparing' ? (
+            <li className="add-busy" aria-live="polite"><Loader2 className="spin" /><span>Preparando {preparing.done + 1 > preparing.total ? preparing.total : preparing.done + 1} de {preparing.total}…</span></li>
+          ) : !locked ? (
             <li>
-              <button className="add-more" onClick={() => moreRef.current?.click()} aria-label="Elegir más fotos"><ImagePlus /></button>
+              <button className="add-more" onClick={() => moreRef.current?.click()} aria-label="Elegir más fotos"><ImagePlus /><span>Más</span></button>
               <input
                 ref={moreRef}
                 type="file"
                 accept="image/*"
                 multiple
                 hidden
-                onChange={(e) => { const l = Array.from(e.target.files ?? []); e.target.value = ''; if (l.length) void addFiles(l); }}
+                onChange={(e) => { const l = Array.from(e.target.files ?? []); e.target.value = ''; if (l.length) void prepare(l); }}
               />
             </li>
-          )}
+          ) : null}
         </ul>
 
         {errors.length ? <div className="error" role="alert">{errors.map((e, i) => <p key={i}>{e}</p>)}</div> : null}
 
-        <p className="note">Para que todos las vean hay que publicarlas con la llave de GitHub de la familia. Si no la tienes a mano, guárdalas en el editor y publícalas después.</p>
-        <div className="modal-actions">
-          <button className="btn ghost" onClick={onClose} disabled={busy}>Cancelar</button>
-          <button className="btn" onClick={() => void toEditor()} disabled={busy || !n} data-testid="add-to-editor"><PencilLine /> Guardar y seguir en el editor</button>
-          <button className="btn primary" onClick={() => setPublishing(true)} disabled={busy || !n} data-testid="add-publish">
-            <UploadCloud /> Publicar {n === 1 ? '1 foto' : `${n} fotos`}
+        {phase === 'uploading' ? (
+          <div className="upload-progress" aria-live="polite" data-testid="add-progress">
+            <p>Subiendo {Math.min(sending, n)} de {n}…</p>
+            <div className="bar"><div style={{ width: `${(doneItems.length / Math.max(1, n)) * 100}%` }} /></div>
+          </div>
+        ) : phase === 'failed' ? (
+          <div className="error" role="alert" data-testid="add-failed">
+            <p>{doneItems.length ? `${doneItems.length === 1 ? 'Se subió 1 foto' : `Se subieron ${doneItems.length} fotos`}, pero ${fotos(n - doneItems.length)} no.` : 'No se pudieron subir.'} Revisa tu conexión a internet e inténtalo otra vez.</p>
+          </div>
+        ) : (
+          <label className="who-field">
+            <span>¿Quién {n === 1 ? 'la' : 'las'} comparte? <small>(opcional)</small></span>
+            <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Tu nombre, ej.: Tía Rosa" maxLength={LIMITS.author} autoComplete="name" data-testid="add-name" />
+          </label>
+        )}
+
+        <div className="add-actions">
+          {phase === 'failed' ? (
+            <button className="btn primary huge" onClick={() => void upload()} data-testid="add-retry"><RotateCcw /> Intentar otra vez</button>
+          ) : (
+            <button className="btn primary huge" onClick={() => void upload()} disabled={phase !== 'ready' || !n} data-testid="add-publish">
+              {phase === 'uploading' ? <><Loader2 className="spin" /> Subiendo…</> : phase === 'preparing' ? 'Preparando…' : n ? `Agregar ${fotos(n)} al libro` : 'Elige al menos una foto'}
+            </button>
+          )}
+          <button className="btn ghost" onClick={() => onClose(firstNew)} disabled={locked}>
+            {phase === 'failed' && doneItems.length ? 'Cerrar' : 'Cancelar'}
           </button>
         </div>
       </div>

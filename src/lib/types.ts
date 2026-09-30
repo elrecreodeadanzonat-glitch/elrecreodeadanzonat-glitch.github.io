@@ -28,6 +28,10 @@ export interface Photo {
   focalPoint: FocalPoint;
   hidden: boolean;
   createdAt: string;
+  /** photos added from the book (Firestore): who shared it */
+  addedBy?: string;
+  /** only the thumbnail is here yet; the full image is on its way */
+  pending?: boolean;
 }
 
 export interface Gallery {

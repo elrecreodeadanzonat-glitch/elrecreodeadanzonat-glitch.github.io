@@ -1,0 +1,90 @@
+rules_version = '2';
+
+// Libro de mamá — Firestore security rules.
+// Anyone with the link may ADD photos and comments (validated here); nobody can edit or delete them from the site.
+// Hiding/showing (soft moderation) needs the family moderation code, which lives in admin/config (never readable)
+// and travels only inside a brand-new, unreadable modlog entry written in the same commit.
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function data() { return request.resource.data; }
+    function isNew() { return data().createdAt == request.time; }
+    function str(v, min, max) { return v is string && v.size() >= min && v.size() <= max; }
+    function adminCode() { return get(/databases/$(database)/documents/admin/config).data.code; }
+    function imageDataUrl(v, max) {
+      return str(v, 30, max) && v.matches('^data:image/(webp|jpeg);base64,[A-Za-z0-9+/=]+$');
+    }
+
+    // a moderation change must come with its own brand-new modlog entry that carries the right code
+    function moderated(target) {
+      let modId = data().modId;
+      let entry = /databases/$(database)/documents/modlog/$(modId);
+      return modId is string && modId.size() <= 64
+        && !exists(entry) && existsAfter(entry)
+        && getAfter(entry).data.target == target
+        && getAfter(entry).data.key == adminCode();
+    }
+
+    match /admin/{doc} {
+      allow read, write: if false;
+    }
+
+    match /modlog/{id} {
+      allow read: if false;
+      allow create: if data().keys().hasOnly(['key', 'target', 'action', 'createdAt'])
+        && data().key == adminCode()
+        && str(data().target, 1, 80)
+        && str(data().action, 1, 20)
+        && isNew();
+      allow update, delete: if false;
+    }
+
+    match /comments/{id} {
+      allow read: if true;
+      allow create: if id.matches('^k[a-z0-9]{12,40}$')
+        && data().keys().hasOnly(['photoId', 'text', 'author', 'createdAt', 'hidden'])
+        && data().keys().hasAll(['photoId', 'text', 'author', 'createdAt', 'hidden'])
+        && data().photoId is string && data().photoId.matches('^[A-Za-z0-9_-]{1,48}$')
+        && str(data().text, 1, 1000)
+        && str(data().author, 0, 60)
+        && data().hidden == false
+        && isNew();
+      allow update: if data().diff(resource.data).affectedKeys().hasOnly(['hidden', 'modId'])
+        && data().hidden is bool
+        && moderated('comments/' + id);
+      allow delete: if false;
+    }
+
+    match /photos/{id} {
+      allow read: if true;
+      allow create: if id.matches('^c[a-z0-9]{12,40}$')
+        && data().keys().hasOnly(['width', 'height', 'color', 'thumb', 'author', 'caption', 'rotation', 'hidden', 'createdAt'])
+        && data().keys().hasAll(['width', 'height', 'color', 'thumb', 'author', 'caption', 'rotation', 'hidden', 'createdAt'])
+        && data().width is int && data().width > 0 && data().width <= 10000
+        && data().height is int && data().height > 0 && data().height <= 10000
+        && data().color is string && data().color.matches('^#[0-9a-f]{6}$')
+        && imageDataUrl(data().thumb, 60000)
+        && str(data().author, 0, 60)
+        && str(data().caption, 0, 300)
+        && data().rotation == 0
+        && data().hidden == false
+        && isNew()
+        && existsAfter(/databases/$(database)/documents/photoImages/$(id));
+      allow update: if data().diff(resource.data).affectedKeys().hasOnly(['hidden', 'rotation', 'caption', 'modId'])
+        && data().hidden is bool
+        && data().rotation in [0, 90, 180, 270]
+        && str(data().caption, 0, 300)
+        && moderated('photos/' + id);
+      allow delete: if false;
+    }
+
+    match /photoImages/{id} {
+      allow read: if true;
+      allow create: if data().keys().hasOnly(['data', 'createdAt'])
+        && imageDataUrl(data().data, 1000000)
+        && isNew()
+        && existsAfter(/databases/$(database)/documents/photos/$(id));
+      allow update, delete: if false;
+    }
+  }
+}

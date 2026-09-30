@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { useSortable } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
 import {
-  GripVertical, ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight, RotateCw, Crosshair, Trash2, Undo2, Expand, Shrink,
+  GripVertical, ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight, RotateCw, Crosshair, Trash2, Undo2, Expand, Shrink, MessageCircle,
 } from 'lucide-react';
 import type { Photo } from '../lib/types';
 import type { Op } from './store';
@@ -19,9 +19,12 @@ interface Props {
   onAskHide: (ids: string[]) => void;
   onFocal: (p: Photo) => void;
   trash?: boolean;
+  /** number of comments on this photo; with onComments, a button opens them */
+  comments?: number;
+  onComments?: (p: Photo) => void;
 }
 
-export function PhotoCard({ photo, position, total, thumbUrl, selected, isNew, onSelect, onOp, onAskHide, onFocal, trash }: Props) {
+export function PhotoCard({ photo, position, total, thumbUrl, selected, isNew, onSelect, onOp, onAskHide, onFocal, trash, comments = 0, onComments }: Props) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: photo.id, disabled: trash });
   const [caption, setCaption] = useState(photo.caption);
   const [captionSrc, setCaptionSrc] = useState(photo.caption);
@@ -54,6 +57,11 @@ export function PhotoCard({ photo, position, total, thumbUrl, selected, isNew, o
         ) : null}
         <span className="num">{trash ? 'Papelera' : `${position}`}</span>
         {isNew ? <span className="badge">Nueva</span> : null}
+        {onComments ? (
+          <button className={`card-comments${comments ? ' has' : ''}`} onClick={() => onComments(photo)} aria-label={`Comentarios de la foto ${position} (${comments})`} data-testid="card-comments">
+            <MessageCircle aria-hidden="true" /> {comments}
+          </button>
+        ) : null}
         {!trash ? (
           <label className="check">
             <input type="checkbox" checked={selected} onChange={(e) => onSelect(photo.id, e.target.checked)} aria-label={`Seleccionar la foto ${position}`} />
