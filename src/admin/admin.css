@@ -2,21 +2,6 @@ body { overflow: auto; background: var(--cream); }
 .admin { min-height: 100vh; padding: 0 0 60px; color: var(--ink); }
 .admin .loading, .admin > .error { padding: 40px 20px; font-size: 1.1rem; }
 
-.btn {
-  display: inline-flex; align-items: center; gap: 8px; min-height: 44px; padding: 0 16px;
-  border-radius: 12px; border: 0; cursor: pointer; font-weight: 650; font-size: .95rem;
-  background: #fff; color: var(--ink); box-shadow: inset 0 0 0 1.5px rgba(58, 31, 46, .16);
-  transition: background .15s ease, transform .15s ease, opacity .15s ease; text-decoration: none;
-}
-.btn svg { width: 19px; height: 19px; }
-.btn:hover:not(:disabled) { background: #FFF6EA; }
-.btn:active:not(:disabled) { transform: scale(.97); }
-.btn:disabled { opacity: .45; cursor: default; }
-.btn.icon { padding: 0; width: 44px; justify-content: center; }
-.btn.primary { background: linear-gradient(135deg, var(--terracotta), var(--coral)); color: #FFF8EE; box-shadow: 0 6px 16px -8px rgba(169, 62, 44, .8); }
-.btn.primary:hover:not(:disabled) { background: linear-gradient(135deg, #cf4d38, #e98068); }
-.btn.danger { background: #fff; color: #A5301F; box-shadow: inset 0 0 0 1.5px rgba(165, 48, 31, .35); }
-.btn.ghost { background: transparent; }
 
 .admin-head {
   position: sticky; top: 0; z-index: 10;
@@ -95,36 +80,6 @@ body { overflow: auto; background: var(--cream); }
 .card-actions button.danger { color: #A5301F; background: #FBE6E1; }
 .card-actions .restore { grid-column: 1 / -1; display: flex; gap: 8px; justify-content: center; font-weight: 700; background: #E3F1EE; color: #1f6b66; }
 
-/* dialogs */
-.modal-backdrop { position: fixed; inset: 0; z-index: 50; display: grid; place-items: center; padding: 16px; background: rgba(30, 14, 22, .55); }
-.modal {
-  position: relative; width: min(560px, 100%); max-height: calc(100vh - 32px); overflow: auto;
-  background: #FFFCF7; border-radius: 20px; padding: 22px 20px 18px; box-shadow: 0 30px 80px -20px rgba(0, 0, 0, .5);
-}
-.modal.small { width: min(420px, 100%); }
-.modal h2 { margin: 0 0 8px; font-family: var(--font-display); font-style: italic; font-size: 1.5rem; }
-.modal p { line-height: 1.5; }
-.modal-x { position: absolute; top: 10px; right: 10px; width: 40px; height: 40px; border: 0; border-radius: 12px; background: transparent; cursor: pointer; display: grid; place-items: center; }
-.modal-actions { display: flex; justify-content: flex-end; gap: 8px; flex-wrap: wrap; margin-top: 14px; }
-.howto { background: #FFF4DE; border-radius: 14px; padding: 10px 14px; }
-.howto summary { cursor: pointer; font-weight: 700; display: flex; gap: 8px; align-items: center; }
-.howto summary svg { width: 18px; height: 18px; }
-.howto ol { padding-left: 20px; line-height: 1.55; }
-.howto a { color: var(--terracotta-deep); font-weight: 700; }
-.howto a svg { width: 14px; height: 14px; vertical-align: -2px; }
-.note { font-size: .88rem; color: var(--ink-soft); }
-.token-field { display: grid; gap: 6px; margin-top: 12px; font-weight: 650; }
-.token-field input { min-height: 46px; border-radius: 12px; border: 1.5px solid rgba(58, 31, 46, .2); padding: 0 12px; font: inherit; }
-.modal .error { color: #A5301F; font-weight: 650; }
-.steps { list-style: none; padding: 0; margin: 10px 0; display: grid; gap: 10px; }
-.steps li { display: flex; align-items: center; gap: 10px; color: var(--ink-soft); }
-.steps li svg { width: 22px; height: 22px; }
-.steps li.ok { color: #1f6b66; }
-.steps li.now { color: var(--ink); font-weight: 700; }
-.steps .dot { width: 22px; height: 22px; border-radius: 50%; box-shadow: inset 0 0 0 2px rgba(58, 31, 46, .2); }
-.spin { animation: spin 1s linear infinite; }
-@keyframes spin { to { transform: rotate(360deg); } }
-.done .big { font-family: var(--font-display); font-style: italic; font-size: 1.6rem; margin: 6px 0; color: #1f6b66; }
 .focal-pick { position: relative; margin: 10px auto; max-width: 100%; width: fit-content; cursor: crosshair; touch-action: none; }
 .focal-pick img { max-width: 100%; max-height: 55vh; border-radius: 10px; }
 

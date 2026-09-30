@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import {
   ChevronLeft, ChevronRight, Pause, Play, Volume2, VolumeX, ZoomIn, ZoomOut, Minimize2, Maximize, Minimize,
-  LayoutGrid, X, Expand, Shrink,
+  LayoutGrid, X, Expand, Shrink, Plus,
 } from 'lucide-react';
 import type { FitMode, Photo } from '../lib/types';
 import { assetUrl, displayAspect } from '../lib/gallery';
@@ -21,6 +21,10 @@ interface Props {
   startIndex?: number;
   /** used by the admin preview: no fullscreen hand-off to the document */
   embedded?: boolean;
+  /** «+» at the end of the thumbnails tray; omitted in the admin preview */
+  onAddFiles?: (files: File[]) => void;
+  /** a dialog is open on top: stop autoplay, gestures and keyboard */
+  blocked?: boolean;
 }
 
 interface Layer { photo: Photo; key: number; dir: 1 | -1 | 0; leaving?: boolean }
@@ -43,7 +47,7 @@ function preload(p: Photo | undefined, sizes: string) {
   img.src = assetUrl(p.src);
 }
 
-export function Viewer({ photos, music, onToggleMute, onVolume, onFinish, startIndex = 0, embedded = false }: Props) {
+export function Viewer({ photos, music, onToggleMute, onVolume, onFinish, startIndex = 0, embedded = false, onAddFiles, blocked = false }: Props) {
   const n = photos.length;
   const [index, setIndex] = useState(() => Math.min(Math.max(0, startIndex), Math.max(0, n - 1)));
   const [playing, setPlaying] = useState(true);
@@ -62,6 +66,7 @@ export function Viewer({ photos, music, onToggleMute, onVolume, onFinish, startI
   const hideTimer = useRef<number | undefined>(undefined);
   const rootRef = useRef<HTMLDivElement>(null);
   const trayRef = useRef<HTMLDivElement>(null);
+  const addInput = useRef<HTMLInputElement>(null);
 
   const photo = photos[index];
   const fit: FitMode = fitOverride ?? photo?.fitMode ?? 'contain';
@@ -170,7 +175,7 @@ export function Viewer({ photos, music, onToggleMute, onVolume, onFinish, startI
   // zoom resets by itself whenever the photo or the fit mode changes
   const { stageRef, zoom: z, dragX, zoomIn, zoomOut, reset: resetZoom, isZoomed, active: gesturing, handlers } = useGestures({
     contentSize: { w: frame.w, h: frame.h },
-    enabled: !trayOpen,
+    enabled: !trayOpen && !blocked,
     resetKey: `${index}:${fit}`,
     onSwipe: (dir) => (dir > 0 ? next() : prev()),
     onTap: (fx) => {
@@ -182,7 +187,7 @@ export function Viewer({ photos, music, onToggleMute, onVolume, onFinish, startI
   });
 
   // ---- 15 s autoplay ----
-  const running = playing && !trayOpen && !isZoomed && !!(photo && loaded[photo.id]) && !transitioning && n > 0;
+  const running = playing && !blocked && !trayOpen && !isZoomed && !!(photo && loaded[photo.id]) && !transitioning && n > 0;
   const autoNext = useCallback(() => {
     if (index >= n - 1) onFinish();
     else go(index + 1, 1);
@@ -213,6 +218,7 @@ export function Viewer({ photos, music, onToggleMute, onVolume, onFinish, startI
   // ---- keyboard ----
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      if (blocked) return;
       const t = e.target as HTMLElement;
       if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA')) return;
       switch (e.key) {
@@ -237,7 +243,7 @@ export function Viewer({ photos, music, onToggleMute, onVolume, onFinish, startI
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [next, prev, trayOpen, isZoomed, resetZoom, zoomIn, zoomOut, immersive, toggleFullscreen, onToggleMute, revealUi]);
+  }, [blocked, next, prev, trayOpen, isZoomed, resetZoom, zoomIn, zoomOut, immersive, toggleFullscreen, onToggleMute, revealUi]);
 
   // keep the current thumbnail in view
   useEffect(() => {
@@ -408,7 +414,31 @@ export function Viewer({ photos, music, onToggleMute, onVolume, onFinish, startI
               <span>{i + 1}</span>
             </button>
           ))}
+          {trayOpen && onAddFiles ? (
+            <button className="thumb add" onClick={() => addInput.current?.click()} aria-label="Agregar fotos al libro" data-testid="add-photo-tile">
+              <Plus aria-hidden="true" />
+              <span>Agregar</span>
+            </button>
+          ) : null}
         </div>
+        {onAddFiles ? (
+          <input
+            ref={addInput}
+            type="file"
+            accept="image/*"
+            multiple
+            hidden
+            data-testid="add-input"
+            onChange={(e) => {
+              const list = Array.from(e.target.files ?? []);
+              e.target.value = '';
+              if (list.length) {
+                setTrayOpen(false);
+                onAddFiles(list);
+              }
+            }}
+          />
+        ) : null}
       </div>
     </div>
   );
